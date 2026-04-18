@@ -1,7 +1,12 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+
 from sqlalchemy.orm import Session
 
 from app.core.exception import BusinessException
-from app.schemas.chat import ChatSendData, ChatSendRequest
+from app.schemas.chat import ChatAssistantActionData, ChatSendData, ChatSendRequest
 from app.services.conversation_service import conversation_service
 from app.services.llm_service import llm_service
 from app.services.message_service import message_service
@@ -9,6 +14,7 @@ from app.services.message_service import message_service
 
 class ChatService:
     HISTORY_LIMIT = 10
+    PROMPT_VERSION = "phase10.v1"
     SYSTEM_PROMPT = (
         """你是“智语康伴”的核心对话智能体，一名面向老年陪伴与健康关怀场景的主动式智能护理助手。
 
@@ -175,6 +181,225 @@ B. 主动发起模式
 
         return messages
 
+    def _build_send_data(
+        self,
+        conversation_id: int,
+        user_message_id: int,
+        assistant_message,
+    ) -> ChatSendData:
+        return ChatSendData(
+            conversation_id=conversation_id,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_message.id,
+            reply=assistant_message.content,
+            assistant_status=assistant_message.status,
+            prompt_version=assistant_message.prompt_version,
+            replied_at=assistant_message.updated_at,
+        )
+
+    def _build_action_data(self, assistant_message) -> ChatAssistantActionData:
+        return ChatAssistantActionData(
+            conversation_id=assistant_message.conversation_id,
+            assistant_message_id=assistant_message.id,
+            assistant_status=assistant_message.status,
+            error_code=assistant_message.error_code,
+            error_message=assistant_message.error_message,
+            updated_at=assistant_message.updated_at,
+        )
+
+    def _sse_line(self, payload: dict[str, object]) -> str:
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    def _build_regenerate_context(
+        self,
+        db: Session,
+        user_id: int,
+        assistant_message_id: int,
+    ):
+        source_assistant = message_service.get_assistant_or_raise_for_user(
+            db=db,
+            user_id=user_id,
+            assistant_message_id=assistant_message_id,
+        )
+
+        if source_assistant.reply_to_message_id is None:
+            raise BusinessException(
+                code=40052,
+                message="assistant message cannot regenerate without reply_to_message_id",
+                status_code=400,
+            )
+
+        user_message = message_service.get_or_raise_for_user(
+            db=db,
+            user_id=user_id,
+            message_id=source_assistant.reply_to_message_id,
+        )
+        if user_message.role != "user":
+            raise BusinessException(
+                code=40053,
+                message="reply_to_message is not a user message",
+                status_code=400,
+            )
+
+        history_messages = message_service.get_history_until_message(
+            db=db,
+            user_id=user_id,
+            conversation_id=source_assistant.conversation_id,
+            end_message_id=user_message.id,
+            limit=self.HISTORY_LIMIT,
+        )
+        if not history_messages:
+            raise BusinessException(
+                code=40442,
+                message="history not found for regenerate",
+                status_code=404,
+            )
+
+        return source_assistant, user_message, history_messages
+
+    def _stream_assistant_reply(
+        self,
+        db: Session,
+        user_id: int,
+        conversation_id: int,
+        user_message_id: int,
+        assistant_message_id: int,
+        llm_messages: list[dict[str, str]],
+    ) -> Iterator[str]:
+        yield self._sse_line(
+            {
+                "event": "start",
+                "conversation_id": conversation_id,
+                "user_message_id": user_message_id,
+                "assistant_message_id": assistant_message_id,
+                "assistant_status": "draft",
+                "prompt_version": self.PROMPT_VERSION,
+            }
+        )
+
+        try:
+            for token in llm_service.stream_chat(llm_messages):
+                assistant_message = message_service.append_stream_token(
+                    db=db,
+                    user_id=user_id,
+                    assistant_message_id=assistant_message_id,
+                    token=token,
+                )
+                if assistant_message.status == "cancelled":
+                    yield self._sse_line(
+                        {
+                            "event": "finish",
+                            "conversation_id": conversation_id,
+                            "user_message_id": user_message_id,
+                            "assistant_message_id": assistant_message.id,
+                            "assistant_status": "cancelled",
+                            "reply": assistant_message.content,
+                            "prompt_version": assistant_message.prompt_version,
+                            "replied_at": assistant_message.updated_at.isoformat(),
+                        }
+                    )
+                    return
+
+                yield self._sse_line(
+                    {
+                        "event": "token",
+                        "assistant_message_id": assistant_message.id,
+                        "token": token,
+                    }
+                )
+
+            assistant_message = message_service.mark_assistant_completed(
+                db=db,
+                user_id=user_id,
+                assistant_message_id=assistant_message_id,
+            )
+            yield self._sse_line(
+                {
+                    "event": "finish",
+                    "conversation_id": conversation_id,
+                    "user_message_id": user_message_id,
+                    "assistant_message_id": assistant_message.id,
+                    "assistant_status": assistant_message.status,
+                    "reply": assistant_message.content,
+                    "prompt_version": assistant_message.prompt_version,
+                    "replied_at": assistant_message.updated_at.isoformat(),
+                }
+            )
+        except BusinessException as exc:
+            assistant_message = message_service.mark_assistant_failed(
+                db=db,
+                user_id=user_id,
+                assistant_message_id=assistant_message_id,
+                error_code=exc.code,
+                error_message=exc.message,
+            )
+
+            if assistant_message.status == "cancelled":
+                yield self._sse_line(
+                    {
+                        "event": "finish",
+                        "conversation_id": conversation_id,
+                        "user_message_id": user_message_id,
+                        "assistant_message_id": assistant_message.id,
+                        "assistant_status": "cancelled",
+                        "reply": assistant_message.content,
+                        "prompt_version": assistant_message.prompt_version,
+                        "replied_at": assistant_message.updated_at.isoformat(),
+                    }
+                )
+                return
+
+            yield self._sse_line(
+                {
+                    "event": "error",
+                    "assistant_message_id": assistant_message.id,
+                    "assistant_status": assistant_message.status,
+                    "error_code": assistant_message.error_code,
+                    "error_message": assistant_message.error_message,
+                }
+            )
+            yield self._sse_line(
+                {
+                    "event": "finish",
+                    "conversation_id": conversation_id,
+                    "user_message_id": user_message_id,
+                    "assistant_message_id": assistant_message.id,
+                    "assistant_status": assistant_message.status,
+                    "reply": assistant_message.content,
+                    "prompt_version": assistant_message.prompt_version,
+                    "replied_at": assistant_message.updated_at.isoformat(),
+                }
+            )
+        except Exception as exc:
+            assistant_message = message_service.mark_assistant_failed(
+                db=db,
+                user_id=user_id,
+                assistant_message_id=assistant_message_id,
+                error_code=50052,
+                error_message=str(exc),
+            )
+            yield self._sse_line(
+                {
+                    "event": "error",
+                    "assistant_message_id": assistant_message.id,
+                    "assistant_status": assistant_message.status,
+                    "error_code": assistant_message.error_code,
+                    "error_message": assistant_message.error_message,
+                }
+            )
+            yield self._sse_line(
+                {
+                    "event": "finish",
+                    "conversation_id": conversation_id,
+                    "user_message_id": user_message_id,
+                    "assistant_message_id": assistant_message.id,
+                    "assistant_status": assistant_message.status,
+                    "reply": assistant_message.content,
+                    "prompt_version": assistant_message.prompt_version,
+                    "replied_at": assistant_message.updated_at.isoformat(),
+                }
+            )
+
     def send_message(
         self,
         db: Session,
@@ -182,7 +407,9 @@ B. 主动发起模式
         payload: ChatSendRequest,
     ) -> ChatSendData:
         conversation_service.get_or_raise(
-            db, user_id, payload.conversation_id
+            db=db,
+            user_id=user_id,
+            conversation_id=payload.conversation_id,
         )
 
         cleaned_content = payload.content.strip()
@@ -200,33 +427,216 @@ B. 主动发起模式
             role="user",
             content=cleaned_content,
             message_type="text",
+            status="completed",
         )
 
-        history_messages = message_service.get_recent_for_conversation(
+        history_messages = message_service.get_recent_completed_for_conversation(
             db=db,
             user_id=user_id,
             conversation_id=payload.conversation_id,
             limit=self.HISTORY_LIMIT,
         )
-
         llm_messages = self._build_llm_messages(history_messages)
-        assistant_reply = llm_service.chat(llm_messages)
 
-        assistant_message = message_service.create_for_conversation(
+        assistant_message = message_service.create_assistant_draft(
             db=db,
             user_id=user_id,
             conversation_id=payload.conversation_id,
-            role="assistant",
-            content=assistant_reply,
-            message_type="text",
+            reply_to_message_id=user_message.id,
+            prompt_version=self.PROMPT_VERSION,
         )
 
-        return ChatSendData(
+        try:
+            assistant_reply = llm_service.chat(llm_messages)
+            assistant_message = message_service.mark_assistant_completed(
+                db=db,
+                user_id=user_id,
+                assistant_message_id=assistant_message.id,
+                final_content=assistant_reply,
+            )
+        except BusinessException as exc:
+            message_service.mark_assistant_failed(
+                db=db,
+                user_id=user_id,
+                assistant_message_id=assistant_message.id,
+                error_code=exc.code,
+                error_message=exc.message,
+            )
+            raise
+        except Exception as exc:
+            message_service.mark_assistant_failed(
+                db=db,
+                user_id=user_id,
+                assistant_message_id=assistant_message.id,
+                error_code=50051,
+                error_message=str(exc),
+            )
+            raise BusinessException(
+                code=50051,
+                message="chat generation failed",
+                status_code=500,
+            )
+
+        return self._build_send_data(
+            conversation_id=payload.conversation_id,
+            user_message_id=user_message.id,
+            assistant_message=assistant_message,
+        )
+
+    def send_message_stream(
+        self,
+        db: Session,
+        user_id: int,
+        payload: ChatSendRequest,
+    ) -> Iterator[str]:
+        conversation_service.get_or_raise(
+            db=db,
+            user_id=user_id,
+            conversation_id=payload.conversation_id,
+        )
+
+        cleaned_content = payload.content.strip()
+        if not cleaned_content:
+            raise BusinessException(
+                code=40051,
+                message="content cannot be empty",
+                status_code=400,
+            )
+
+        user_message = message_service.create_for_conversation(
+            db=db,
+            user_id=user_id,
+            conversation_id=payload.conversation_id,
+            role="user",
+            content=cleaned_content,
+            message_type="text",
+            status="completed",
+        )
+
+        history_messages = message_service.get_recent_completed_for_conversation(
+            db=db,
+            user_id=user_id,
+            conversation_id=payload.conversation_id,
+            limit=self.HISTORY_LIMIT,
+        )
+        llm_messages = self._build_llm_messages(history_messages)
+
+        assistant_message = message_service.create_assistant_draft(
+            db=db,
+            user_id=user_id,
+            conversation_id=payload.conversation_id,
+            reply_to_message_id=user_message.id,
+            prompt_version=self.PROMPT_VERSION,
+        )
+
+        return self._stream_assistant_reply(
+            db=db,
+            user_id=user_id,
             conversation_id=payload.conversation_id,
             user_message_id=user_message.id,
             assistant_message_id=assistant_message.id,
-            reply=assistant_message.content,
-            replied_at=assistant_message.created_at,
+            llm_messages=llm_messages,
+        )
+
+    def cancel_message(
+        self,
+        db: Session,
+        user_id: int,
+        assistant_message_id: int,
+    ) -> ChatAssistantActionData:
+        assistant_message = message_service.cancel_assistant_message(
+            db=db,
+            user_id=user_id,
+            assistant_message_id=assistant_message_id,
+        )
+        return self._build_action_data(assistant_message)
+
+    def regenerate_message(
+        self,
+        db: Session,
+        user_id: int,
+        assistant_message_id: int,
+    ) -> ChatSendData:
+        source_assistant, user_message, history_messages = self._build_regenerate_context(
+            db=db,
+            user_id=user_id,
+            assistant_message_id=assistant_message_id,
+        )
+        llm_messages = self._build_llm_messages(history_messages)
+
+        new_assistant = message_service.create_assistant_draft(
+            db=db,
+            user_id=user_id,
+            conversation_id=source_assistant.conversation_id,
+            reply_to_message_id=user_message.id,
+            prompt_version=self.PROMPT_VERSION,
+        )
+
+        try:
+            assistant_reply = llm_service.chat(llm_messages)
+            new_assistant = message_service.mark_assistant_completed(
+                db=db,
+                user_id=user_id,
+                assistant_message_id=new_assistant.id,
+                final_content=assistant_reply,
+            )
+        except BusinessException as exc:
+            message_service.mark_assistant_failed(
+                db=db,
+                user_id=user_id,
+                assistant_message_id=new_assistant.id,
+                error_code=exc.code,
+                error_message=exc.message,
+            )
+            raise
+        except Exception as exc:
+            message_service.mark_assistant_failed(
+                db=db,
+                user_id=user_id,
+                assistant_message_id=new_assistant.id,
+                error_code=50053,
+                error_message=str(exc),
+            )
+            raise BusinessException(
+                code=50053,
+                message="chat regenerate failed",
+                status_code=500,
+            )
+
+        return self._build_send_data(
+            conversation_id=source_assistant.conversation_id,
+            user_message_id=user_message.id,
+            assistant_message=new_assistant,
+        )
+
+    def regenerate_message_stream(
+        self,
+        db: Session,
+        user_id: int,
+        assistant_message_id: int,
+    ) -> Iterator[str]:
+        source_assistant, user_message, history_messages = self._build_regenerate_context(
+            db=db,
+            user_id=user_id,
+            assistant_message_id=assistant_message_id,
+        )
+        llm_messages = self._build_llm_messages(history_messages)
+
+        new_assistant = message_service.create_assistant_draft(
+            db=db,
+            user_id=user_id,
+            conversation_id=source_assistant.conversation_id,
+            reply_to_message_id=user_message.id,
+            prompt_version=self.PROMPT_VERSION,
+        )
+
+        return self._stream_assistant_reply(
+            db=db,
+            user_id=user_id,
+            conversation_id=source_assistant.conversation_id,
+            user_message_id=user_message.id,
+            assistant_message_id=new_assistant.id,
+            llm_messages=llm_messages,
         )
 
 
