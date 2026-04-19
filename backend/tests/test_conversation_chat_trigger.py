@@ -44,7 +44,7 @@ def test_conversation_chat_trigger_and_permissions(client, create_user, monkeypa
     chat_data = chat_response.json()["data"]
     assert chat_data["reply"] == "先别着急，我在这里陪你，我们可以一步一步来。"
     assert chat_data["assistant_status"] == "completed"
-    assert chat_data["prompt_version"] == "phase10.v1"
+    assert chat_data["prompt_version"] == "phase11.v1"
     assert_beijing_datetime(chat_data["replied_at"])
 
     messages_response = client.get(

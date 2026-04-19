@@ -68,7 +68,7 @@ def test_chat_send_stream_success(client, create_user, monkeypatch):
     assert events[4]["event"] == "finish"
     assert events[4]["assistant_status"] == "completed"
     assert events[4]["reply"] == "您好，今天感觉怎么样？"
-    assert events[4]["prompt_version"] == "phase10.v1"
+    assert events[4]["prompt_version"] == "phase11.v1"
     assert_beijing_datetime(events[4]["replied_at"])
 
     messages_response = client.get(

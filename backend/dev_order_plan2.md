@@ -14,7 +14,7 @@
 
 结合当前仓库代码、README 和 `.codex_memory`，可以明确这几个事实：
 
-### 1. 当前稳定主线仍然是 Phase 9 后端
+### 1. 当前稳定主线已推进到 Phase 11 后端
 
 已经有的后端模块主要是：
 
@@ -24,31 +24,28 @@
 - `records`
 - `conversations`
 - `messages`
-- `chat` 同步发送
+- `chat` 同步发送、SSE 流式发送、取消与重生成
+- `conversation_summaries`
+- `user_memories`
+- `chat_context_service`
+- `core/prompts.py` prompt 版本化
 - `trigger_rules`
 - `active_logs`
 - `proactive`
 - `realtime`
 
-### 2. 第十、十一阶段还不能算完成
+### 2. 第十、十一阶段已经完成后端闭环
 
-`.codex_memory/project_snapshot.md` 之前写过“第十、十一阶段已完成”，但当前工作区实际源码并不支持这个结论。
+当前工作区已经补齐第十、十一阶段的源码、迁移和测试：
 
-当前真实情况是：
+- 第十阶段：聊天流式输出、消息状态机、取消、同步/流式重生成、状态落库。
+- 第十一阶段：会话摘要、长期记忆 CRUD、上下文预算裁剪、prompt 版本化、聊天主链路上下文注入。
+- 当前 Alembic head 为 `b8f3c2d4e6a7`。
+- 当前后端测试为 `11 passed`。
 
-- `backend/app/db/base.py` 和 `backend/app/models/__init__.py` 已经引用了 `ConversationSummary`、`UserMemory`
-- `backend/app/schemas/chat.py`、`backend/app/schemas/message.py` 也已经加入了阶段 10 的部分字段
-- 但对应的模型、服务、路由、迁移文件并不存在
-- `backend/app/api/routes/chat.py` 目前只有同步接口 `POST /api/v1/chat/send`
-- 当前后端直接导入会失败：`ModuleNotFoundError: app.models.conversation_summary`
+### 3. 后端进阶开发的下一步
 
-所以后端当前不是“已经完成 10/11 阶段”，而是：
-
-> **Phase 9 主体已完成，但工作区混入了尚未闭环的 10/11 阶段残留改动。**
-
-### 3. 后端进阶开发的第一步不是继续堆功能，而是先恢复可运行基线
-
-不要带着 broken import、半套 schema、半套模型继续往后做 RAG、工具调用和异步任务。
+下一步从第十二阶段开始：知识库导入、切片与向量库。不要把 RAG、工具调用或异步任务提前混进聊天主链路。
 
 ---
 
@@ -136,15 +133,17 @@
 
 ## 六、P0：恢复可运行基线
 
+> 当前状态：已完成。`import app.main`、`alembic upgrade head`、`pytest tests -q` 均已通过。
+
 ### 阶段目标
 
-把当前“混入了一半阶段 10/11 字段，但源码没闭环”的状态收敛成一个能正常启动、能正常迁移、能正常测试的后端基线。
+把“混入了一半阶段 10/11 字段，但源码没闭环”的状态收敛成一个能正常启动、能正常迁移、能正常测试的后端基线。
 
 ### 必须完成的内容
 
 #### 1. 处理阶段 10/11 的残留引用
 
-当前需要先统一这几类不一致：
+曾经需要先统一这几类不一致：
 
 - `db/base.py` 引用了缺失模型
 - `models/__init__.py` 引用了缺失模型
@@ -153,12 +152,10 @@
 - 但 `models/message.py` 还没有这些字段
 - 也没有对应 Alembic 迁移
 
-这里必须二选一：
+处理方式已选定为补完阶段 10/11，而不是回退：
 
-1. 要么把阶段 10/11 真正补完
-2. 要么先回退这些残留改动，恢复纯 Phase 9 基线
-
-如果你的目标是继续做进阶版，建议直接按本文后续阶段把它补完，不要回退后再重做。
+1. 阶段 10 已补完：流式聊天、消息状态机、取消和重生成。
+2. 阶段 11 已补完：摘要、长期记忆、上下文工程和 prompt 版本化。
 
 #### 2. 修复导入和启动链路
 
@@ -286,6 +283,8 @@
 ---
 
 ## 八、第十一阶段：上下文工程与长期记忆
+
+> 当前状态：已完成后端最小闭环。已新增 `conversation_summaries`、`user_memories`、`chat_context_service.py`、`core/prompts.py` 和对应路由/测试。
 
 ### 阶段目标
 
