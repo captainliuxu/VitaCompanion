@@ -24,6 +24,8 @@ OPENAPI_TAGS = [
     {"name": "messages", "description": "会话消息查询与调试写入"},
     {"name": "chat", "description": "聊天主链路"},
     {"name": "user-memories", "description": "用户长期记忆 CRUD"},
+    {"name": "knowledge-bases", "description": "知识库、文档导入、切片与检索"},
+    {"name": "rag", "description": "RAG 检索调试与引用"},
     {"name": "trigger-rules", "description": "触发规则配置与检查"},
     {"name": "active-logs", "description": "主动行为日志"},
     {"name": "proactive", "description": "主动窗口、主动消息与主动执行"},
@@ -48,7 +50,7 @@ def create_application() -> FastAPI:
         title=settings.PROJECT_NAME,
         debug=settings.DEBUG,
         version="0.1.0",
-        description="阶段十一版本：聊天流式输出、消息状态机、会话摘要、长期记忆与上下文工程。",
+        description="阶段十三版本：全局共享知识库、文档切片、本地向量检索、RAG 检索调试与聊天引用回答。",
         openapi_tags=OPENAPI_TAGS,
         lifespan=lifespan,
     )

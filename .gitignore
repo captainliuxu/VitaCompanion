@@ -6,6 +6,6 @@ node_modules/
 dist/
 .vite/
 /backend/app/schemas/common.py
-/backend/requirements.txt
 .codex_memory/
 AGENTS.md
+/backend/storage/

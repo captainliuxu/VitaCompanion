@@ -1,4 +1,5 @@
 DEFAULT_CHAT_PROMPT_VERSION = "phase11.v1"
+DEFAULT_RAG_PROMPT_VERSION = "phase13.rag.v1"
 SUMMARY_PROMPT_VERSION = "phase11.summary.v1"
 
 
@@ -26,9 +27,25 @@ SUMMARY_PROMPTS: dict[str, str] = {
 }
 
 
+RAG_PROMPTS: dict[str, str] = {
+    DEFAULT_RAG_PROMPT_VERSION: """你正在基于知识库检索结果回答用户问题。
+
+要求：
+1. 优先使用“知识库检索结果”里的内容回答。
+2. 不要编造检索结果没有支持的医学结论。
+3. 如果资料不足，直接说明当前知识库没有足够依据。
+4. 涉及诊断、用药、急症时提醒用户咨询医生或及时就医。
+5. 回答中尽量使用 [1]、[2] 这样的编号标注依据来源。""",
+}
+
+
 def get_chat_prompt(version: str = DEFAULT_CHAT_PROMPT_VERSION) -> str:
     return CHAT_PROMPTS.get(version, CHAT_PROMPTS[DEFAULT_CHAT_PROMPT_VERSION])
 
 
 def get_summary_prompt(version: str = SUMMARY_PROMPT_VERSION) -> str:
     return SUMMARY_PROMPTS.get(version, SUMMARY_PROMPTS[SUMMARY_PROMPT_VERSION])
+
+
+def get_rag_prompt(version: str = DEFAULT_RAG_PROMPT_VERSION) -> str:
+    return RAG_PROMPTS.get(version, RAG_PROMPTS[DEFAULT_RAG_PROMPT_VERSION])

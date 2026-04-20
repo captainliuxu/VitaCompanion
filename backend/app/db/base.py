@@ -2,6 +2,9 @@ from app.db.session import Base
 from app.models.active_log import ActiveLog  # noqa: F401
 from app.models.conversation import Conversation  # noqa: F401
 from app.models.conversation_summary import ConversationSummary  # noqa: F401
+from app.models.knowledge_base import KnowledgeBase  # noqa: F401
+from app.models.knowledge_chunk import KnowledgeChunk  # noqa: F401
+from app.models.knowledge_document import KnowledgeDocument  # noqa: F401
 from app.models.message import Message  # noqa: F401
 from app.models.profile import Profile  # noqa: F401
 from app.models.proactive_message import ProactiveMessage  # noqa: F401
@@ -18,6 +21,9 @@ __all__ = [
     "Record",
     "Conversation",
     "ConversationSummary",
+    "KnowledgeBase",
+    "KnowledgeDocument",
+    "KnowledgeChunk",
     "Message",
     "TriggerRule",
     "ActiveLog",

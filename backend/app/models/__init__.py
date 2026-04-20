@@ -1,6 +1,9 @@
 from app.models.active_log import ActiveLog
 from app.models.conversation import Conversation
 from app.models.conversation_summary import ConversationSummary
+from app.models.knowledge_base import KnowledgeBase
+from app.models.knowledge_chunk import KnowledgeChunk
+from app.models.knowledge_document import KnowledgeDocument
 from app.models.message import Message
 from app.models.profile import Profile
 from app.models.proactive_message import ProactiveMessage
@@ -16,6 +19,9 @@ __all__ = [
     "Record",
     "Conversation",
     "ConversationSummary",
+    "KnowledgeBase",
+    "KnowledgeDocument",
+    "KnowledgeChunk",
     "Message",
     "TriggerRule",
     "ActiveLog",

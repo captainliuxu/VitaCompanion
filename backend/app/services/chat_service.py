@@ -6,11 +6,18 @@ from collections.abc import Iterator
 from sqlalchemy.orm import Session
 
 from app.core.exception import BusinessException
-from app.schemas.chat import ChatAssistantActionData, ChatSendData, ChatSendRequest
-from app.services.chat_context_service import ChatContext, chat_context_service
+from app.schemas.chat import (
+    ChatAssistantActionData,
+    ChatMode,
+    ChatSendData,
+    ChatSendRequest,
+)
+from app.schemas.rag import RagCitation
+from app.services.chat_context_service import chat_context_service
 from app.services.conversation_service import conversation_service
 from app.services.llm_service import llm_service
 from app.services.message_service import message_service
+from app.services.rag_service import rag_service
 
 
 class ChatService:
@@ -19,6 +26,7 @@ class ChatService:
         conversation_id: int,
         user_message_id: int,
         assistant_message,
+        citations: list[RagCitation] | None = None,
     ) -> ChatSendData:
         return ChatSendData(
             conversation_id=conversation_id,
@@ -28,6 +36,7 @@ class ChatService:
             assistant_status=assistant_message.status,
             prompt_version=assistant_message.prompt_version,
             replied_at=assistant_message.updated_at,
+            citations=citations or [],
         )
 
     def _build_action_data(self, assistant_message) -> ChatAssistantActionData:
@@ -42,6 +51,43 @@ class ChatService:
 
     def _sse_line(self, payload: dict[str, object]) -> str:
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    def _serialize_citations(
+        self,
+        citations: list[RagCitation] | None,
+    ) -> list[dict[str, object]]:
+        return [item.model_dump() for item in citations or []]
+
+    def _build_generation_inputs(
+        self,
+        db: Session,
+        user_id: int,
+        payload: ChatSendRequest,
+        user_message_id: int,
+        query: str,
+    ) -> tuple[str, list[dict[str, str]], list[RagCitation]]:
+        context = chat_context_service.build_for_conversation(
+            db=db,
+            user_id=user_id,
+            conversation_id=payload.conversation_id,
+            end_message_id=user_message_id,
+        )
+        if payload.mode == ChatMode.rag:
+            rag_context = rag_service.build_answer_context(
+                db=db,
+                user_id=user_id,
+                knowledge_base_id=payload.knowledge_base_id,
+                query=query,
+                top_k=payload.top_k,
+                base_messages=context.messages,
+            )
+            return (
+                rag_context.prompt_version,
+                rag_context.messages,
+                rag_context.citations,
+            )
+
+        return context.prompt_version, context.messages, []
 
     def _build_regenerate_context(
         self,
@@ -96,7 +142,9 @@ class ChatService:
         conversation_id: int,
         user_message_id: int,
         assistant_message_id: int,
-        context: ChatContext,
+        messages: list[dict[str, str]],
+        prompt_version: str,
+        citations: list[RagCitation] | None = None,
     ) -> Iterator[str]:
         yield self._sse_line(
             {
@@ -105,12 +153,13 @@ class ChatService:
                 "user_message_id": user_message_id,
                 "assistant_message_id": assistant_message_id,
                 "assistant_status": "draft",
-                "prompt_version": context.prompt_version,
+                "prompt_version": prompt_version,
+                "citations": self._serialize_citations(citations),
             }
         )
 
         try:
-            for token in llm_service.stream_chat(context.messages):
+            for token in llm_service.stream_chat(messages):
                 assistant_message = message_service.append_stream_token(
                     db=db,
                     user_id=user_id,
@@ -122,6 +171,7 @@ class ChatService:
                         conversation_id=conversation_id,
                         user_message_id=user_message_id,
                         assistant_message=assistant_message,
+                        citations=citations,
                     )
                     return
 
@@ -142,6 +192,7 @@ class ChatService:
                 conversation_id=conversation_id,
                 user_message_id=user_message_id,
                 assistant_message=assistant_message,
+                citations=citations,
             )
         except BusinessException as exc:
             assistant_message = message_service.mark_assistant_failed(
@@ -155,6 +206,7 @@ class ChatService:
                 conversation_id=conversation_id,
                 user_message_id=user_message_id,
                 assistant_message=assistant_message,
+                citations=citations,
             )
         except Exception as exc:
             assistant_message = message_service.mark_assistant_failed(
@@ -168,6 +220,7 @@ class ChatService:
                 conversation_id=conversation_id,
                 user_message_id=user_message_id,
                 assistant_message=assistant_message,
+                citations=citations,
             )
 
     def _finish_stream_line(
@@ -175,6 +228,7 @@ class ChatService:
         conversation_id: int,
         user_message_id: int,
         assistant_message,
+        citations: list[RagCitation] | None = None,
     ) -> str:
         return self._sse_line(
             {
@@ -185,6 +239,7 @@ class ChatService:
                 "assistant_status": assistant_message.status,
                 "reply": assistant_message.content,
                 "prompt_version": assistant_message.prompt_version,
+                "citations": self._serialize_citations(citations),
                 "replied_at": assistant_message.updated_at.isoformat(),
             }
         )
@@ -194,12 +249,14 @@ class ChatService:
         conversation_id: int,
         user_message_id: int,
         assistant_message,
+        citations: list[RagCitation] | None = None,
     ) -> Iterator[str]:
         if assistant_message.status == "cancelled":
             yield self._finish_stream_line(
                 conversation_id=conversation_id,
                 user_message_id=user_message_id,
                 assistant_message=assistant_message,
+                citations=citations,
             )
             return
 
@@ -216,6 +273,7 @@ class ChatService:
             conversation_id=conversation_id,
             user_message_id=user_message_id,
             assistant_message=assistant_message,
+            citations=citations,
         )
 
     def send_message(
@@ -247,22 +305,23 @@ class ChatService:
             message_type="text",
             status="completed",
         )
-        context = chat_context_service.build_for_conversation(
+        prompt_version, messages, citations = self._build_generation_inputs(
             db=db,
             user_id=user_id,
-            conversation_id=payload.conversation_id,
-            end_message_id=user_message.id,
+            payload=payload,
+            user_message_id=user_message.id,
+            query=cleaned_content,
         )
         assistant_message = message_service.create_assistant_draft(
             db=db,
             user_id=user_id,
             conversation_id=payload.conversation_id,
             reply_to_message_id=user_message.id,
-            prompt_version=context.prompt_version,
+            prompt_version=prompt_version,
         )
 
         try:
-            assistant_reply = llm_service.chat(context.messages)
+            assistant_reply = llm_service.chat(messages)
             assistant_message = message_service.mark_assistant_completed(
                 db=db,
                 user_id=user_id,
@@ -296,6 +355,7 @@ class ChatService:
             conversation_id=payload.conversation_id,
             user_message_id=user_message.id,
             assistant_message=assistant_message,
+            citations=citations,
         )
 
     def send_message_stream(
@@ -327,18 +387,19 @@ class ChatService:
             message_type="text",
             status="completed",
         )
-        context = chat_context_service.build_for_conversation(
+        prompt_version, messages, citations = self._build_generation_inputs(
             db=db,
             user_id=user_id,
-            conversation_id=payload.conversation_id,
-            end_message_id=user_message.id,
+            payload=payload,
+            user_message_id=user_message.id,
+            query=cleaned_content,
         )
         assistant_message = message_service.create_assistant_draft(
             db=db,
             user_id=user_id,
             conversation_id=payload.conversation_id,
             reply_to_message_id=user_message.id,
-            prompt_version=context.prompt_version,
+            prompt_version=prompt_version,
         )
 
         return self._stream_assistant_reply(
@@ -347,7 +408,9 @@ class ChatService:
             conversation_id=payload.conversation_id,
             user_message_id=user_message.id,
             assistant_message_id=assistant_message.id,
-            context=context,
+            messages=messages,
+            prompt_version=prompt_version,
+            citations=citations,
         )
 
     def cancel_message(
@@ -444,7 +507,8 @@ class ChatService:
             conversation_id=source_assistant.conversation_id,
             user_message_id=user_message.id,
             assistant_message_id=new_assistant.id,
-            context=context,
+            messages=context.messages,
+            prompt_version=context.prompt_version,
         )
 
 
