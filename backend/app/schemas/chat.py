@@ -14,7 +14,7 @@ class ChatMode(str, Enum):
 class ChatSendRequest(BaseModel):
     conversation_id: int = Field(..., ge=1)
     content: str = Field(..., min_length=1, max_length=2000)
-    mode: ChatMode = ChatMode.plain
+    mode: ChatMode = ChatMode.rag
     knowledge_base_id: int | None = Field(default=None, ge=1)
     top_k: int = Field(default=5, ge=1, le=20)
 

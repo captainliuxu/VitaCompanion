@@ -73,14 +73,22 @@ class ChatService:
             end_message_id=user_message_id,
         )
         if payload.mode == ChatMode.rag:
-            rag_context = rag_service.build_answer_context(
-                db=db,
-                user_id=user_id,
-                knowledge_base_id=payload.knowledge_base_id,
-                query=query,
-                top_k=payload.top_k,
-                base_messages=context.messages,
-            )
+            try:
+                rag_context = rag_service.build_answer_context(
+                    db=db,
+                    user_id=user_id,
+                    knowledge_base_id=payload.knowledge_base_id,
+                    query=query,
+                    top_k=payload.top_k,
+                    base_messages=context.messages,
+                )
+            except BusinessException as exc:
+                if (
+                    payload.knowledge_base_id is None
+                    and rag_service.can_fallback_to_plain(exc)
+                ):
+                    return context.prompt_version, context.messages, []
+                raise
             return (
                 rag_context.prompt_version,
                 rag_context.messages,

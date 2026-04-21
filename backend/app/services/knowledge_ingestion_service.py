@@ -221,10 +221,10 @@ class KnowledgeIngestionService:
         document: KnowledgeDocument,
         chunks: list[str],
     ) -> None:
+        embeddings = embedding_service.embed_texts(chunks)
         db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id))
 
-        for index, content in enumerate(chunks):
-            embedding = embedding_service.embed_text(content)
+        for index, (content, embedding) in enumerate(zip(chunks, embeddings)):
             chunk = KnowledgeChunk(
                 knowledge_base_id=knowledge_base_id,
                 document_id=document.id,
@@ -233,7 +233,7 @@ class KnowledgeIngestionService:
                 content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
                 char_count=len(content),
                 token_count=chunking_service.count_tokens(content),
-                embedding_model=embedding_service.MODEL_NAME,
+                embedding_model=embedding_service.model_name,
                 embedding_json=json.dumps(embedding, separators=(",", ":")),
                 metadata_json=json.dumps(
                     {

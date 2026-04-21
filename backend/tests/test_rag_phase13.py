@@ -95,7 +95,7 @@ def test_rag_retrieve_debug_returns_shared_citations(client, create_user):
         shutil.rmtree(source_dir, ignore_errors=True)
 
 
-def test_chat_send_rag_injects_sources_and_returns_citations(
+def test_chat_send_defaults_to_shared_rag_and_returns_citations(
     client,
     create_user,
     monkeypatch,
@@ -134,8 +134,6 @@ def test_chat_send_rag_injects_sources_and_returns_citations(
             json={
                 "conversation_id": conversation_id,
                 "content": "高血压日常需要注意什么？",
-                "mode": "rag",
-                "knowledge_base_id": knowledge_base_id,
                 "top_k": 2,
             },
         )
@@ -161,5 +159,49 @@ def test_chat_send_rag_injects_sources_and_returns_citations(
         messages = messages_response.json()["data"]["items"]
         assert messages[-1]["role"] == "assistant"
         assert messages[-1]["prompt_version"] == DEFAULT_RAG_PROMPT_VERSION
+    finally:
+        shutil.rmtree(source_dir, ignore_errors=True)
+
+
+def test_chat_send_can_explicitly_use_plain_mode(client, create_user, monkeypatch):
+    owner = create_user("plain_chat")
+    source_dir = _make_storage_dir("phase13_plain")
+
+    try:
+        (source_dir / "blood_pressure.txt").write_text(
+            "高血压患者应坚持家庭血压监测。",
+            encoding="utf-8",
+        )
+        _create_knowledge_base_with_docs(client, owner["headers"], source_dir)
+        conversation_id = _create_conversation(
+            client,
+            owner["headers"],
+            "Plain 聊天",
+        )
+
+        captured_messages: list[list[dict[str, str]]] = []
+
+        def fake_chat(messages):
+            captured_messages.append(messages)
+            return "普通聊天回复。"
+
+        monkeypatch.setattr(llm_service, "chat", fake_chat)
+
+        chat_response = client.post(
+            "/api/v1/chat/send",
+            headers=owner["headers"],
+            json={
+                "conversation_id": conversation_id,
+                "content": "我们聊聊天。",
+                "mode": "plain",
+            },
+        )
+        assert chat_response.status_code == 200, chat_response.text
+        data = chat_response.json()["data"]
+        assert data["assistant_status"] == "completed"
+        assert data["citations"] == []
+
+        llm_context = "\n".join(item["content"] for item in captured_messages[0])
+        assert "知识库检索结果" not in llm_context
     finally:
         shutil.rmtree(source_dir, ignore_errors=True)

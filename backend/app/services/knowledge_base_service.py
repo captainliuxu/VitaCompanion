@@ -64,6 +64,13 @@ class KnowledgeBaseService:
             )
         return item
 
+    def get_default_active(self, db: Session) -> KnowledgeBase | None:
+        return db.scalar(
+            select(KnowledgeBase)
+            .where(KnowledgeBase.status == "active")
+            .order_by(KnowledgeBase.id.asc())
+        )
+
     def update_for_user(
         self,
         db: Session,

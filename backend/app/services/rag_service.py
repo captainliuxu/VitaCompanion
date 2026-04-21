@@ -49,17 +49,16 @@ class RagService:
         top_k: int,
         base_messages: list[dict[str, str]],
     ) -> RagAnswerContext:
-        if knowledge_base_id is None:
-            raise BusinessException(
-                code=40096,
-                message="knowledge_base_id is required for rag mode",
-                status_code=400,
-            )
+        resolved_knowledge_base_id = self._resolve_knowledge_base_id(
+            db=db,
+            user_id=user_id,
+            knowledge_base_id=knowledge_base_id,
+        )
 
         items = self._retrieve_items(
             db=db,
             user_id=user_id,
-            knowledge_base_id=knowledge_base_id,
+            knowledge_base_id=resolved_knowledge_base_id,
             query=query,
             top_k=top_k,
         )
@@ -79,6 +78,32 @@ class RagService:
             messages=self._insert_source_message(base_messages, source_message),
             citations=self._build_citations(items),
         )
+
+    def _resolve_knowledge_base_id(
+        self,
+        db: Session,
+        user_id: int,
+        knowledge_base_id: int | None,
+    ) -> int:
+        if knowledge_base_id is not None:
+            knowledge_base_service.get_or_raise(
+                db=db,
+                user_id=user_id,
+                knowledge_base_id=knowledge_base_id,
+            )
+            return knowledge_base_id
+
+        default_knowledge_base = knowledge_base_service.get_default_active(db)
+        if default_knowledge_base is None:
+            raise BusinessException(
+                code=40498,
+                message="default knowledge base not found",
+                status_code=404,
+            )
+        return default_knowledge_base.id
+
+    def can_fallback_to_plain(self, exc: BusinessException) -> bool:
+        return exc.code in {40496, 40498}
 
     def _retrieve_items(
         self,

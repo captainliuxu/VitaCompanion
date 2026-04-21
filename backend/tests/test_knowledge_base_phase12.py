@@ -7,6 +7,7 @@ from pathlib import Path
 from app.core.config import BASE_DIR
 from app.core.exception import BusinessException
 from app.services.document_loader_service import document_loader_service
+from app.services.embedding_service import embedding_service
 from app.services.knowledge_ingestion_service import knowledge_ingestion_service
 from tests.conftest import assert_beijing_datetime
 
@@ -201,3 +202,55 @@ def test_pdf_loader_rejects_low_text_quality_pdf(monkeypatch, tmp_path):
         assert "OCR" in exc.message
     else:
         raise AssertionError("low text quality pdf should be rejected")
+
+
+def test_zhipuai_embedding_provider_batches_requests(monkeypatch):
+    captured_payloads = []
+
+    class FakeResponse:
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            count = len(captured_payloads[-1]["input"])
+            return {
+                "data": [
+                    {"index": index, "embedding": [float(index), 1.0]}
+                    for index in range(count)
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return None
+
+        def post(self, url, headers, json):
+            captured_payloads.append(json)
+            assert url.endswith("/embeddings")
+            assert headers["Authorization"].startswith("Bearer ")
+            return FakeResponse()
+
+    from app.core.config import settings
+    import app.services.embedding_service as embedding_module
+
+    monkeypatch.setattr(settings, "EMBEDDING_PROVIDER", "zhipuai")
+    monkeypatch.setattr(settings, "EMBEDDING_API_KEY", "")
+    monkeypatch.setattr(settings, "LLM_API_KEY", "test-zhipu-key")
+    monkeypatch.setattr(settings, "EMBEDDING_BASE_URL", "")
+    monkeypatch.setattr(settings, "LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+    monkeypatch.setattr(settings, "EMBEDDING_MODEL_NAME", "embedding-3")
+    monkeypatch.setattr(embedding_module.httpx, "Client", FakeClient)
+
+    embeddings = embedding_service.embed_texts(["甲", "乙"])
+
+    assert captured_payloads == [{"model": "embedding-3", "input": ["甲", "乙"]}]
+    assert embeddings == [[0.0, 1.0], [1.0, 1.0]]
+    assert embedding_service.model_name == "embedding-3"

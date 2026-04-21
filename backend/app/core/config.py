@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = ""
     LLM_MODEL_NAME: str = "qwen-plus"
 
+    EMBEDDING_PROVIDER: str = "zhipuai"
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_BASE_URL: str = ""
+    EMBEDDING_MODEL_NAME: str = "embedding-3"
+
     WS_ENABLED: bool = True
     SCHEDULER_ENABLED: bool = True
     SCHEDULER_RUN_ON_STARTUP: bool = True

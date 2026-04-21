@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,16 +28,19 @@ class VectorStoreService:
             .join(KnowledgeDocument, KnowledgeChunk.document_id == KnowledgeDocument.id)
             .where(
                 KnowledgeChunk.knowledge_base_id == knowledge_base_id,
+                KnowledgeChunk.embedding_model == embedding_service.model_name,
                 KnowledgeDocument.status == "completed",
             )
         )
 
         scored: list[tuple[float, KnowledgeChunk, KnowledgeDocument]] = []
         for chunk, document in db.execute(stmt).all():
-            score = self._cosine_similarity(
+            semantic_score = self._cosine_similarity(
                 query_vector,
                 json.loads(chunk.embedding_json),
             )
+            keyword_score = self._keyword_score(query, chunk.content)
+            score = self._hybrid_score(semantic_score, keyword_score)
             scored.append((score, chunk, document))
 
         scored.sort(key=lambda item: item[0], reverse=True)
@@ -64,6 +68,41 @@ class VectorStoreService:
         if left_norm == 0 or right_norm == 0:
             return 0.0
         return dot / (left_norm * right_norm)
+
+    def _hybrid_score(self, semantic_score: float, keyword_score: float) -> float:
+        return semantic_score + keyword_score
+
+    def _keyword_score(self, query: str, content: str) -> float:
+        query_tokens = self._keyword_tokens(query)
+        if not query_tokens:
+            return 0.0
+
+        normalized_content = re.sub(r"\s+", "", content.lower())
+        matches = 0.0
+        for token in query_tokens:
+            if token in normalized_content:
+                matches += 1.0 + min(len(token), 6) * 0.1
+
+        return matches / max(len(query_tokens), 1)
+
+    def _keyword_tokens(self, text: str) -> list[str]:
+        normalized = re.sub(r"\s+", "", text.lower())
+        tokens: set[str] = set()
+        for item in re.findall(r"[\u4e00-\u9fff]+|[a-z0-9_]+", normalized):
+            if re.fullmatch(r"[\u4e00-\u9fff]+", item):
+                if len(item) >= 2:
+                    tokens.add(item)
+                tokens.update(
+                    item[index : index + 2]
+                    for index in range(max(len(item) - 1, 0))
+                )
+                tokens.update(
+                    item[index : index + 3]
+                    for index in range(max(len(item) - 2, 0))
+                )
+            elif len(item) >= 2:
+                tokens.add(item)
+        return sorted(tokens)
 
 
 vector_store_service = VectorStoreService()
