@@ -65,7 +65,13 @@ def proactive_scan_job() -> None:
                         rule_id=rule.id,
                     )
 
-                    if result["status"] in {"created", "blocked", "rate_limited"}:
+                    if result["status"] in {
+                        "created",
+                        "blocked_by_window",
+                        "blocked_by_rate_limit",
+                        "blocked_by_cooldown",
+                        "blocked_by_safety",
+                    }:
                         break
                 except Exception:
                     logger.exception(
