@@ -87,15 +87,21 @@ const handleRegister = async () => {
     return
   }
 
+  const payload = {
+    username,
+    password,
+    confirm_password: confirmPassword,
+    email,
+    phone
+  }
+
   loading.value = true
 
   try {
-    const res = await axios.post('/api/v1/auth/register', form.value)
-
-    console.log('注册成功响应：', res.data)
+    const res = await axios.post('/api/auth/register', payload)
 
     if (res.data.code === 0) {
-      msg.value = res.data.message || '注册成功！即将跳转到登录'
+      msg.value = res.data.message || '注册成功，正在跳转登录页'
       setTimeout(() => {
         router.push('/login')
       }, 1000)
@@ -103,9 +109,6 @@ const handleRegister = async () => {
       msg.value = res.data.message || '注册失败'
     }
   } catch (err) {
-    console.log('注册失败完整对象：', err)
-    console.log('注册失败返回数据：', err.response?.data)
-
     msg.value =
       err.response?.data?.message ||
       err.response?.data?.detail ||

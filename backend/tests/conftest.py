@@ -26,6 +26,7 @@ os.environ["JWT_SECRET_KEY"] = "phase9_test_secret_key_with_32_chars"
 os.environ["LLM_API_KEY"] = "test-key"
 os.environ["LLM_BASE_URL"] = "http://llm.test.invalid"
 os.environ["LLM_MODEL_NAME"] = "test-model"
+os.environ["EMBEDDING_PROVIDER"] = "local-hash"
 
 from app.db.session import Base, engine  # noqa: E402
 from app.main import create_application  # noqa: E402

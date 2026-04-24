@@ -14,7 +14,9 @@ class UserRegisterRequest(BaseModel):
         if self.password != self.confirm_password:
             raise ValueError("password and confirm_password do not match")
         return self
-
+class LoginRequest(BaseModel):
+    username:str
+    password:str
 
 class Token(BaseModel):
     access_token: str

@@ -43,6 +43,8 @@ def test_conversation_chat_trigger_and_permissions(client, create_user, monkeypa
     assert chat_response.status_code == 200, chat_response.text
     chat_data = chat_response.json()["data"]
     assert chat_data["reply"] == "先别着急，我在这里陪你，我们可以一步一步来。"
+    assert chat_data["assistant_status"] == "completed"
+    assert chat_data["prompt_version"] == "phase11.v1"
     assert_beijing_datetime(chat_data["replied_at"])
 
     messages_response = client.get(
@@ -53,7 +55,10 @@ def test_conversation_chat_trigger_and_permissions(client, create_user, monkeypa
     messages = messages_response.json()["data"]["items"]
     assert len(messages) == 2
     assert messages[0]["role"] == "user"
+    assert messages[0]["status"] == "completed"
     assert messages[1]["role"] == "assistant"
+    assert messages[1]["status"] == "completed"
+    assert messages[1]["reply_to_message_id"] == messages[0]["id"]
     assert_beijing_datetime(messages[0]["created_at"])
     assert_beijing_datetime(messages[1]["created_at"])
 

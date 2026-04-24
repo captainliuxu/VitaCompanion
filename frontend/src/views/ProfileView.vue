@@ -55,7 +55,7 @@ import BottomNav from '../components/BottomNav.vue'
 const router = useRouter()
 
 // 检测登录状态
-const token = ref(localStorage.getItem('token'))
+const token = ref(localStorage.getItem('access_token'))
 const username = ref('')
 const email = ref('')
 
@@ -65,9 +65,10 @@ const goToRegister = () => router.push('/register')
 
 // 退出登录
 const logout = () => {
-  localStorage.removeItem('token')
+  localStorage.removeItem('access_token')
   token.value = null
   alert('退出成功')
+  router.push('/login')
 }
 
 // 页面加载获取用户信息

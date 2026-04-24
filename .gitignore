@@ -10,3 +10,6 @@ dist/
 /backend/app/schemas/common.py
 /backend/requirements.txt
 *.db
+.codex_memory/
+AGENTS.md
+/backend/storage/
