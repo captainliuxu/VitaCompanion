@@ -7,10 +7,15 @@ from sqlalchemy.orm import Session
 
 from app.core.timezone import now_beijing
 from app.models.active_log import ActiveLog
+from app.models.proactive_decision import ProactiveDecision
 from app.models.proactive_message import ProactiveMessage
 from app.models.trigger_rule import TriggerRule
 from app.services.active_log_service import active_log_service
+from app.services.proactive_ai_decision_service import proactive_ai_decision_service
+from app.services.proactive_cooldown_service import proactive_cooldown_service
 from app.services.proactive_message_service import proactive_message_service
+from app.services.proactive_safety_service import proactive_safety_service
+from app.services.proactive_signal_service import proactive_signal_service
 from app.services.proactive_window_service import proactive_window_service
 from app.services.trigger_rule_service import trigger_rule_service
 from app.ws.manager import realtime_manager
@@ -30,6 +35,7 @@ class ProactiveService:
             "condition_json": rule.condition_json,
             "executed_at": now_beijing().isoformat(),
         }
+        decision: ProactiveDecision | None = None
 
         try:
             evaluation = trigger_rule_service.evaluate_for_user(db, user_id, rule)
@@ -46,6 +52,7 @@ class ProactiveService:
                 )
                 return {
                     "log_id": log.id,
+                    "decision_id": None,
                     "rule_id": rule.id,
                     "triggered": False,
                     "message_created": False,
@@ -55,67 +62,214 @@ class ProactiveService:
                 }
 
             window = proactive_window_service.get_or_create_for_user(db, user_id)
-            allowed, window_reason = proactive_window_service.allow_trigger_now(window)
+            today_count = self.count_today_created(db, user_id)
+            context_package = proactive_signal_service.build_context_package(
+                db=db,
+                user_id=user_id,
+                trigger_rule=rule,
+                evaluation=evaluation,
+                window=window,
+                already_triggered_today=today_count,
+            )
 
-            if not allowed:
-                response_payload = {
-                    **evaluation,
-                    "window_reason": window_reason,
-                    "quiet_hours_start": window.quiet_hours_start,
-                    "quiet_hours_end": window.quiet_hours_end,
-                }
+            ai_response_payload: dict[str, Any] = {
+                "prompt_version": proactive_ai_decision_service.PROMPT_VERSION,
+            }
+            try:
+                raw_ai_content = proactive_ai_decision_service.request_decision(
+                    context_package
+                )
+                ai_response_payload["raw_content"] = raw_ai_content
+                ai_decision = proactive_ai_decision_service.parse_decision(raw_ai_content)
+                ai_response_payload["parsed"] = ai_decision
+            except Exception as exc:
+                error_message = self._exception_message(exc)
+                ai_response_payload["error"] = error_message
+                decision = self._create_decision(
+                    db=db,
+                    user_id=user_id,
+                    rule=rule,
+                    evaluation=evaluation,
+                    context_package=context_package,
+                    ai_response_json=ai_response_payload,
+                    status="failed",
+                    blocked_reason=error_message[:200],
+                )
+                raise
+
+            safety_result = proactive_safety_service.review(
+                ai_decision=ai_decision,
+                context_package=context_package,
+            )
+
+            if not safety_result["allowed"]:
+                decision = self._create_decision(
+                    db=db,
+                    user_id=user_id,
+                    rule=rule,
+                    evaluation=evaluation,
+                    context_package=context_package,
+                    ai_response_json=ai_response_payload,
+                    status=safety_result["status"],
+                    blocked_reason=safety_result["blocked_reason"],
+                    safety_result=safety_result,
+                )
                 log = active_log_service.create_log(
                     db=db,
                     user_id=user_id,
                     trigger_rule_id=rule.id,
                     action_type="generate_proactive_message",
-                    status="blocked",
+                    status=safety_result["status"],
                     request_payload=request_payload,
-                    response_payload=response_payload,
+                    response_payload=self._build_log_payload(
+                        evaluation=evaluation,
+                        decision=decision,
+                        safety_result=safety_result,
+                    ),
                 )
                 return {
                     "log_id": log.id,
+                    "decision_id": decision.id,
                     "rule_id": rule.id,
                     "triggered": True,
                     "message_created": False,
-                    "status": "blocked",
+                    "status": safety_result["status"],
+                    "reason": safety_result["blocked_reason"],
+                    "proactive_message": None,
+                }
+
+            allowed, window_reason = proactive_window_service.allow_trigger_now(window)
+
+            if not allowed:
+                decision = self._create_decision(
+                    db=db,
+                    user_id=user_id,
+                    rule=rule,
+                    evaluation=evaluation,
+                    context_package=context_package,
+                    ai_response_json=ai_response_payload,
+                    status="blocked_by_window",
+                    blocked_reason=window_reason,
+                    safety_result=safety_result,
+                )
+                log = active_log_service.create_log(
+                    db=db,
+                    user_id=user_id,
+                    trigger_rule_id=rule.id,
+                    action_type="generate_proactive_message",
+                    status="blocked_by_window",
+                    request_payload=request_payload,
+                    response_payload=self._build_log_payload(
+                        evaluation=evaluation,
+                        decision=decision,
+                        safety_result=safety_result,
+                        extra={
+                            "window_reason": window_reason,
+                            "quiet_hours_start": window.quiet_hours_start,
+                            "quiet_hours_end": window.quiet_hours_end,
+                        },
+                    ),
+                )
+                return {
+                    "log_id": log.id,
+                    "decision_id": decision.id,
+                    "rule_id": rule.id,
+                    "triggered": True,
+                    "message_created": False,
+                    "status": "blocked_by_window",
                     "reason": window_reason,
                     "proactive_message": None,
                 }
 
-            today_count = self.count_today_created(db, user_id)
             if today_count >= window.max_trigger_per_day:
-                response_payload = {
-                    **evaluation,
-                    "today_count": today_count,
-                    "max_trigger_per_day": window.max_trigger_per_day,
-                }
+                decision = self._create_decision(
+                    db=db,
+                    user_id=user_id,
+                    rule=rule,
+                    evaluation=evaluation,
+                    context_package=context_package,
+                    ai_response_json=ai_response_payload,
+                    status="blocked_by_rate_limit",
+                    blocked_reason="max trigger per day exceeded",
+                    safety_result=safety_result,
+                )
                 log = active_log_service.create_log(
                     db=db,
                     user_id=user_id,
                     trigger_rule_id=rule.id,
                     action_type="generate_proactive_message",
-                    status="rate_limited",
+                    status="blocked_by_rate_limit",
                     request_payload=request_payload,
-                    response_payload=response_payload,
+                    response_payload=self._build_log_payload(
+                        evaluation=evaluation,
+                        decision=decision,
+                        safety_result=safety_result,
+                        extra={
+                            "today_count": today_count,
+                            "max_trigger_per_day": window.max_trigger_per_day,
+                        },
+                    ),
                 )
                 return {
                     "log_id": log.id,
+                    "decision_id": decision.id,
                     "rule_id": rule.id,
                     "triggered": True,
                     "message_created": False,
-                    "status": "rate_limited",
+                    "status": "blocked_by_rate_limit",
                     "reason": "max trigger per day exceeded",
                     "proactive_message": None,
                 }
 
-            title, content = self.build_message_content(rule, evaluation)
+            in_cooldown, cooldown_reason = proactive_cooldown_service.is_in_cooldown(
+                db=db,
+                user_id=user_id,
+                trigger_rule_id=rule.id,
+                trigger_type=rule.trigger_type,
+                cooldown_hours=int(safety_result["cooldown_hours"] or 24),
+            )
+            if in_cooldown:
+                decision = self._create_decision(
+                    db=db,
+                    user_id=user_id,
+                    rule=rule,
+                    evaluation=evaluation,
+                    context_package=context_package,
+                    ai_response_json=ai_response_payload,
+                    status="blocked_by_cooldown",
+                    blocked_reason=cooldown_reason,
+                    safety_result=safety_result,
+                )
+                log = active_log_service.create_log(
+                    db=db,
+                    user_id=user_id,
+                    trigger_rule_id=rule.id,
+                    action_type="generate_proactive_message",
+                    status="blocked_by_cooldown",
+                    request_payload=request_payload,
+                    response_payload=self._build_log_payload(
+                        evaluation=evaluation,
+                        decision=decision,
+                        safety_result=safety_result,
+                    ),
+                )
+                return {
+                    "log_id": log.id,
+                    "decision_id": decision.id,
+                    "rule_id": rule.id,
+                    "triggered": True,
+                    "message_created": False,
+                    "status": "blocked_by_cooldown",
+                    "reason": cooldown_reason,
+                    "proactive_message": None,
+                }
+
             proactive_message = proactive_message_service.create_message(
                 db=db,
                 user_id=user_id,
                 trigger_rule=rule,
-                title=title,
-                content=content,
+                title=safety_result["title"],
+                content=safety_result["message"],
             )
 
             delivered_connection_count = self._push_created_message(
@@ -123,13 +277,20 @@ class ProactiveService:
                 proactive_message=proactive_message,
             )
 
-            response_payload = {
-                **evaluation,
-                "proactive_message_id": proactive_message.id,
-                "title": proactive_message.title,
-                "status": proactive_message.status,
-                "realtime_delivered_connection_count": delivered_connection_count,
-            }
+            decision = self._create_decision(
+                db=db,
+                user_id=user_id,
+                rule=rule,
+                evaluation=evaluation,
+                context_package=context_package,
+                ai_response_json={
+                    **ai_response_payload,
+                    "proactive_message_id": proactive_message.id,
+                },
+                status="created",
+                blocked_reason=None,
+                safety_result=safety_result,
+            )
             log = active_log_service.create_log(
                 db=db,
                 user_id=user_id,
@@ -137,15 +298,26 @@ class ProactiveService:
                 action_type="generate_proactive_message",
                 status="created",
                 request_payload=request_payload,
-                response_payload=response_payload,
+                response_payload=self._build_log_payload(
+                    evaluation=evaluation,
+                    decision=decision,
+                    safety_result=safety_result,
+                    extra={
+                        "proactive_message_id": proactive_message.id,
+                        "title": proactive_message.title,
+                        "status": proactive_message.status,
+                        "realtime_delivered_connection_count": delivered_connection_count,
+                    },
+                ),
             )
             return {
                 "log_id": log.id,
+                "decision_id": decision.id,
                 "rule_id": rule.id,
                 "triggered": True,
                 "message_created": True,
                 "status": "created",
-                "reason": evaluation["reason"],
+                "reason": safety_result["reason"] or evaluation["reason"],
                 "proactive_message": proactive_message,
             }
         except Exception as exc:
@@ -156,7 +328,10 @@ class ProactiveService:
                 action_type="generate_proactive_message",
                 status="failed",
                 request_payload=request_payload,
-                response_payload={"error": str(exc)},
+                response_payload={
+                    "error": self._exception_message(exc),
+                    "decision_id": decision.id if decision else None,
+                },
             )
             raise
 
@@ -183,6 +358,83 @@ class ProactiveService:
             )
         )
         return db.scalar(stmt) or 0
+
+    def list_decisions_for_user(
+        self,
+        db: Session,
+        user_id: int,
+    ) -> list[ProactiveDecision]:
+        stmt = (
+            select(ProactiveDecision)
+            .where(ProactiveDecision.user_id == user_id)
+            .order_by(
+                ProactiveDecision.created_at.desc(),
+                ProactiveDecision.id.desc(),
+            )
+        )
+        return list(db.scalars(stmt).all())
+
+    def _create_decision(
+        self,
+        db: Session,
+        user_id: int,
+        rule: TriggerRule,
+        evaluation: dict[str, Any],
+        context_package: dict[str, Any],
+        ai_response_json: dict[str, Any] | None,
+        status: str,
+        blocked_reason: str | None,
+        safety_result: dict[str, Any] | None = None,
+    ) -> ProactiveDecision:
+        safety_result = safety_result or {}
+        decision = ProactiveDecision(
+            user_id=user_id,
+            trigger_rule_id=rule.id,
+            trigger_type=rule.trigger_type,
+            triggered=bool(evaluation.get("triggered")),
+            ai_should_remind=safety_result.get("ai_should_remind"),
+            severity=safety_result.get("severity"),
+            reason=safety_result.get("reason") or evaluation.get("reason"),
+            title=safety_result.get("title"),
+            message=safety_result.get("message"),
+            cooldown_hours=safety_result.get("cooldown_hours"),
+            safety_label=safety_result.get("safety_label"),
+            status=status,
+            blocked_reason=blocked_reason,
+            input_snapshot_json=context_package,
+            ai_response_json=ai_response_json,
+        )
+        db.add(decision)
+        db.commit()
+        db.refresh(decision)
+        return decision
+
+    def _build_log_payload(
+        self,
+        evaluation: dict[str, Any],
+        decision: ProactiveDecision,
+        safety_result: dict[str, Any],
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            **evaluation,
+            "decision_id": decision.id,
+            "decision_status": decision.status,
+            "ai_should_remind": decision.ai_should_remind,
+            "severity": decision.severity,
+            "safety_label": decision.safety_label,
+            "blocked_reason": decision.blocked_reason,
+            "title": decision.title,
+            "cooldown_hours": decision.cooldown_hours,
+        }
+        if safety_result.get("message"):
+            payload["message"] = safety_result["message"]
+        if extra:
+            payload.update(extra)
+        return payload
+
+    def _exception_message(self, exc: Exception) -> str:
+        return str(getattr(exc, "message", None) or str(exc) or exc.__class__.__name__)
 
     def build_message_content(
         self,

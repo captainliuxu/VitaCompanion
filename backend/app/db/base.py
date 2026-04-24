@@ -7,6 +7,7 @@ from app.models.knowledge_chunk import KnowledgeChunk  # noqa: F401
 from app.models.knowledge_document import KnowledgeDocument  # noqa: F401
 from app.models.message import Message  # noqa: F401
 from app.models.profile import Profile  # noqa: F401
+from app.models.proactive_decision import ProactiveDecision  # noqa: F401
 from app.models.proactive_message import ProactiveMessage  # noqa: F401
 from app.models.proactive_window import ProactiveWindow  # noqa: F401
 from app.models.record import Record  # noqa: F401
@@ -27,6 +28,7 @@ __all__ = [
     "Message",
     "TriggerRule",
     "ActiveLog",
+    "ProactiveDecision",
     "ProactiveWindow",
     "ProactiveMessage",
     "UserMemory",
