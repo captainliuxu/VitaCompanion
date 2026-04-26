@@ -1,10 +1,16 @@
-export async function listConversations() {
+function getAuthHeaders() {
   const token = localStorage.getItem('access_token')
 
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`
+  }
+}
+
+export async function listConversations() {
   const res = await fetch('/api/conversations', {
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
+    method: 'GET',
+    headers: getAuthHeaders()
   })
 
   const payload = await res.json()
@@ -17,14 +23,9 @@ export async function listConversations() {
 }
 
 export async function createConversation(payload = {}) {
-  const token = localStorage.getItem('access_token')
-
   const res = await fetch('/api/conversations', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
+    headers: getAuthHeaders(),
     body: JSON.stringify(payload)
   })
 

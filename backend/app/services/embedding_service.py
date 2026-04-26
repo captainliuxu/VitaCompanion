@@ -33,17 +33,25 @@ class EmbeddingService:
         if not texts:
             return []
 
+        disable_embeddings = getattr(settings,"DISABLE_EMBEDDINGS", True)
+
+        if disable_embeddings:   # ✅ 在函数里面！
+            print("⚠️ embeddings 已关闭，使用假向量")
+            return [[0.0] * 384 for _ in texts]
+
         provider = self.provider
+
         if provider in {"zhipuai", "zhipu", "glm"}:
             return self._embed_texts_zhipuai(texts)
+
         if provider in {"local", "local-hash", "hash"}:
             return [self._embed_text_local(text) for text in texts]
 
         raise BusinessException(
-            code=50086,
-            message=f"unsupported embedding provider: {settings.EMBEDDING_PROVIDER}",
-            status_code=500,
-        )
+        code=50086,
+        message=f"unsupported embedding provider: {provider}",
+        status_code=500,
+    )
 
     def _embed_text_local(self, text: str) -> list[float]:
         vector = [0.0] * self.LOCAL_DIMENSIONS

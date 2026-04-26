@@ -61,7 +61,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import BottomNav from '../components/BottomNav.vue'
-import { sendChatMessage } from '../api/chat'
+import { sendChatMessageStream } from '../api/chat'
 import { listConversations, createConversation } from '../api/conversation'
 import { listMessages } from '../api/message'
 
@@ -88,6 +88,11 @@ async function handleSend() {
   const text = inputText.value.trim()
   if (!text) return
 
+  if (!conversationId.value) {
+    alert('会话还没初始化完成，请稍等一下再发送')
+    return
+  }
+
   messages.value.push({
     role: 'user',
     content: text
@@ -95,20 +100,24 @@ async function handleSend() {
 
   inputText.value = ''
 
+  const assistantIndex = messages.value.length
+
+  messages.value.push({
+    role: 'assistant',
+    content: ''
+  })
+
   try {
-    const data = await sendChatMessage(conversationId.value, text)
-    messages.value.push({
-      role: 'assistant',
-      content: data.reply
+    await sendChatMessageStream(conversationId.value, text, (chunk) => {
+      messages.value[assistantIndex].content += chunk
+      messages.value = [...messages.value]
     })
   } catch (error) {
-    messages.value.push({
-      role: 'assistant',
-      content: '后端连接失败，请确认 FastAPI 已启动'
-    })
+    console.error('流式请求失败：', error)
+    messages.value[assistantIndex].content =
+      error.message || '请求失败，请稍后再试'
   }
 }
-
 onMounted(() => {
   console.log('ChatView 进来了')
 })

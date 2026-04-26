@@ -12,4 +12,4 @@ dist/
 *.db
 .codex_memory/
 AGENTS.md
-/backend/storage/
+
