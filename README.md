@@ -1,160 +1,171 @@
-# vue_fastapi
+# 智语康伴 / vita-company
 
-一个基于 `Vue 3 + FastAPI + SQLAlchemy + Alembic` 的健康陪伴系统。当前代码已完成前八个阶段，并在第九阶段补齐了测试、README、演示数据脚本和北京时间统一处理。
+一个基于 `Vue 3 + Vite + FastAPI + SQLAlchemy + Alembic` 的健康陪伴系统仓库。当前代码重心在后端，已经覆盖从账号体系、健康档案、健康记录，到 AI 对话、长期记忆、知识库 RAG、主动关心决策和 WebSocket 实时推送的主链路。
 
-## 当前阶段
+当前仓库状态可以概括为：
 
-- 已完成后端核心模块：用户认证、Profile、Record、Conversation/Message、Chat、Trigger Rule、Active Log、Proactive、WebSocket、Scheduler
-- 已完成第九阶段交付：
-  - 后端接口自动化测试
-  - 北京时间统一修复
-  - 演示数据脚本
-  - Swagger 分组整理
-  - README 与验收文档
+- 后端能力和自动化测试已经推进到 `Phase 15` 附近，明显超出旧 `README` 中的 Phase 9 描述
+- 前端提供登录、注册、聊天、档案、记录等基础页面，但并未完整覆盖后端全部高级能力
+- 根目录 `docker-compose.yml` 目前只编排后端服务
+
+## 当前能力
+
+### 后端
+
+- 用户注册、登录、JWT 鉴权、当前用户信息
+- 健康档案 CRUD
+- 健康记录 CRUD 与筛选
+- 会话管理、消息历史、同步聊天
+- SSE 流式聊天、取消生成、重新生成
+- 会话摘要、长期记忆、上下文裁剪
+- 知识库创建、文档导入、切片、检索调试
+- RAG 聊天回答与引用来源返回
+- 触发规则、主动消息、主动窗口、主动行为日志
+- AI 主动关心决策与安全标签记录
+- WebSocket 实时推送与待展示事件回放
+- `Asia/Shanghai` 时区统一处理
+
+### 前端
+
+- 路由页面：`/`、`/chat`、`/record`、`/profile`、`/login`、`/register`
+- 聊天页已接入后端流式聊天接口
+- 个人资料页支持查看和修改当前用户基础信息
+- 记录页目前仍偏演示态，未完全对齐后端记录模型
 
 ## 技术栈
 
-- 前端：Vue 3、Vite
-- 后端：FastAPI、SQLAlchemy 2.x、Pydantic 2.x
-- 数据库：SQLite
-- 迁移：Alembic
+- 前端：Vue 3、Vue Router、Vite、Axios
+- 后端：FastAPI、SQLAlchemy 2.x、Pydantic 2.x、Alembic
 - 定时任务：APScheduler
+- 数据库：SQLite（当前默认）
+- 向量检索：本地向量存储 + 远程 embedding 接口
+- 大模型接入：OpenAI 兼容的 `chat/completions` / `embeddings` HTTP 接口
 
 ## 目录结构
 
 ```text
-backend/
-├─ alembic/                # 数据库迁移
-├─ app/
-│  ├─ api/                 # 路由与依赖
-│  ├─ core/                # 配置、异常、响应、时区、调度
-│  ├─ db/                  # 数据库会话与 Base
-│  ├─ models/              # SQLAlchemy 模型
-│  ├─ schemas/             # Pydantic 模型
-│  ├─ services/            # 业务服务
-│  └─ ws/                  # WebSocket 管理
-├─ scripts/                # 演示脚本
-└─ tests/                  # 第九阶段接口测试
-
-frontend/
-└─ src/
+.
+├─ backend/
+│  ├─ alembic/                    # 数据库迁移
+│  ├─ app/
+│  │  ├─ api/routes/             # REST / WebSocket 路由
+│  │  ├─ core/                   # 配置、异常、日志、时区、调度
+│  │  ├─ db/                     # 数据库会话与 Base
+│  │  ├─ models/                 # ORM 模型
+│  │  ├─ schemas/                # Pydantic 模型
+│  │  ├─ services/               # 业务服务（聊天、RAG、主动关心等）
+│  │  └─ ws/                     # WebSocket 管理
+│  ├─ scripts/                   # 启动、演示、部署辅助脚本
+│  ├─ storage/                   # 文档导入与知识库存储目录
+│  └─ tests/                     # 后端自动化测试
+├─ frontend/
+│  ├─ src/
+│  │  ├─ api/                    # 前端 API 封装
+│  │  ├─ router/                 # 前端路由
+│  │  ├─ views/                  # 页面
+│  │  └─ components/             # 组件
+│  └─ vite.config.js             # 本地 /api 代理到 8000
+├─ docker-compose.yml            # 后端容器编排
+├─ .env.example                  # 根目录环境变量示例
+└─ ALIYUN_ECS_BACKEND_DEPLOYMENT_TUTORIAL.md
 ```
 
-## 后端启动
+## 快速开始
 
-进入后端目录：
+### 1. 环境要求
 
-```bash
+- Python：建议与 `backend/Dockerfile` 对齐，使用 `3.13`
+- Node.js：`^20.19.0` 或 `>=22.12.0`
+- npm：随 Node 安装
+
+### 2. 配置环境变量
+
+在仓库根目录准备 `.env`：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+至少需要确认这些配置：
+
+- `DATABASE_URL`
+- `JWT_SECRET_KEY`
+- `LLM_API_KEY`
+- `LLM_BASE_URL`
+- `LLM_MODEL_NAME`
+- `EMBEDDING_API_KEY`
+- `EMBEDDING_BASE_URL`
+- `EMBEDDING_MODEL_NAME`
+- `BACKEND_CORS_ORIGINS`
+
+`.env.example` 目前给的是智谱接口示例值；后端代码本身按 OpenAI 兼容协议发送请求。
+
+### 3. 启动后端
+
+主入口是 `backend/app/main.py`，不是仓库里那个较早期的 `backend/main.py` 示例文件。
+
+```powershell
 cd backend
-```
-
-安装依赖：
-
-```bash
-pip install -r requirements.txt
-```
-
-执行迁移：
-
-```bash
 alembic upgrade head
-```
-
-启动后端：
-
-```bash
 uvicorn app.main:app --reload
 ```
 
-启动后访问：
+启动后可访问：
 
 - Swagger：`http://127.0.0.1:8000/docs`
 - OpenAPI：`http://127.0.0.1:8000/openapi.json`
+- 健康检查：`http://127.0.0.1:8000/api/v1/health`
 
-## 前端启动
+### 4. 启动前端
 
-进入前端目录：
-
-```bash
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-默认访问：
+默认访问地址：
 
 - 前端：`http://127.0.0.1:5173`
 
-## 第九阶段测试
+## 测试
 
-在 `backend` 目录执行：
+后端测试位于 `backend/tests/`，当前已覆盖：
 
-```bash
+- 认证与档案
+- 健康记录
+- 会话与消息
+- SSE 流式聊天
+- 会话摘要与长期记忆
+- 知识库导入与检索
+- RAG 调试与聊天引用
+- AI 主动关心决策
+
+执行方式：
+
+```powershell
+cd backend
 pytest tests -q
 ```
 
-当前覆盖内容：
+测试环境会自动关闭调度器和 WebSocket，并使用临时 SQLite 数据库。
 
-- 注册 / 登录
-- Profile CRUD
-- Record CRUD
-- Conversation / Message
-- Chat send
-- Trigger check
-- 越权访问校验
-- 北京时间断言
+## 数据与运行时目录
 
-## 演示数据
+- SQLite 数据库默认在 [healthy_system.db](backend/healthy_system.db)
+- 知识库导入和存储目录在 `backend/storage/`
+- 根目录 `docker-compose.yml` 会把上面两个目录挂载进后端容器
 
-在 `backend` 目录执行：
+## 相关文档
 
-```bash
-python scripts/seed_demo_data.py
-```
+- [后端功能说明（客户/评审版）](backend/BACKEND_CUSTOMER_FUNCTION_DOC.md)
+- [后端部署前验收文档](backend/BACKEND_DEPLOYMENT_ACCEPTANCE.md)
+- [Phase 9 历史验收文档](backend/PHASE9_ACCEPTANCE.md)
+- [阿里云 ECS 后端部署教程](ALIYUN_ECS_BACKEND_DEPLOYMENT_TUTORIAL.md)
+- [前端 API 规格说明](frontend/FRONTEND_API_SPEC.md)
 
-脚本会自动准备：
+## 当前已知事项
 
-- 演示账号
-- 演示 Profile
-- 演示 Record
-- 演示 Conversation / Message
-- 演示 Trigger Rule
-- 演示 Proactive Window
-
-## 北京时间说明
-
-当前所有核心业务时间统一按 `Asia/Shanghai` 处理，包括：
-
-- `created_at`
-- `updated_at`
-- `record_time`
-- `displayed_at`
-- WebSocket 推送时间
-- 触发检查 / 主动服务执行时间
-
-如果你是从旧版本升级，请先执行：
-
-```bash
-alembic upgrade head
-```
-
-最新迁移会把旧库里按 UTC 墙上时间存储的历史数据整体转换成北京时间。
-
-## 主要模块
-
-- `auth`：注册、登录、JWT
-- `users`：当前用户信息
-- `profiles`：健康档案
-- `records`：健康记录
-- `conversations` / `messages`：会话与消息
-- `chat`：聊天主链路
-- `trigger-rules`：规则配置与检查
-- `active-logs`：主动行为日志
-- `proactive`：主动窗口与主动消息
-- `realtime`：WebSocket 与测试推送
-
-## 验收文档
-
-详细验收步骤见：
-
-- [backend/PHASE9_ACCEPTANCE.md](backend/PHASE9_ACCEPTANCE.md)
+- `backend/Dockerfile` 依赖 `backend/requirements.txt`，但当前仓库没有提交该文件；如果要在全新环境直接构建镜像或用 `pip install -r requirements.txt`，需要先补齐依赖清单
+- `frontend/README.md` 仍是 Vite 默认模板，当前以根 `README.md` 为准
+- 前端尚未完整覆盖知识库、RAG 调试、主动关心配置等后端高级能力，调试这些功能建议优先使用 Swagger
