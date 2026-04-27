@@ -1,109 +1,118 @@
 # Frontend 对接清单
 
-更新时间：2026-04-21  
-后端当前阶段：Phase 13 已完成，聊天默认走全局共享知识库 RAG。  
-本文目标：指导前端把当前 demo 壳改成可部署内测版。
+更新时间：2026-04-27  
+后端当前阶段：Phase 13 已完成，线上 HTTPS 已完成。  
+本文目标：指导前端同学把当前 Vue demo 壳改成可联调、可演示的真实前端。
 
 ---
 
 ## 1. 先说结论
 
-当前前端仍是旧 demo 形态，和真实后端接口不匹配。必须先完成下面这些基线改造：
+当前前端代码还是旧 demo，和真实后端差距很大。现在要做的不是“小修小补”，而是把请求层、登录态、聊天页、记录页、档案页接到真实接口。
 
-1. 停用 `GET /api/chat?msg=...`。
-2. 停用记录页写 `localStorage` 的旧逻辑。
-3. 增加统一请求层、登录态、token 注入、错误处理。
-4. 聊天默认调用后端 RAG，不需要前端额外传 `mode=rag` 或 `knowledge_base_id`。
-5. 流式输出由前端做成可选项：用户打开流式时调用 `/chat/send-stream`，否则调用 `/chat/send`。
-6. 知识库是全局共享资源，前端普通用户侧不需要选择知识库。
+当前必须完成的基线项：
 
-后端已验收文档：
+1. 停用 `GET /api/chat?msg=...` 旧接口。
+2. 停用 `RecordView.vue` 写 `localStorage` 的旧逻辑。
+3. 增加统一请求层、token 存取、401 处理、业务错误处理。
+4. 新增登录流程，否则现有受保护接口都不能正常接。
+5. 聊天页改成真实会话 + 真实消息 + 真实 RAG 返回结构。
+6. 档案页和记录页改成真实 CRUD，不再写死静态内容。
 
-- `backend/BACKEND_DEPLOYMENT_ACCEPTANCE.md`
+完整接口说明见：
+
+- `frontend/FRONTEND_API_SPEC.md`
 
 ---
 
-## 2. API 基础约定
+## 2. 当前联调入口
 
-### 2.1 基础路径
-
-开发环境建议前端统一请求：
+线上真实入口：
 
 ```text
-/api/v1
+API Base URL: https://jibao.tech/api/v1
+Swagger UI:   https://jibao.tech/docs
+OpenAPI JSON: https://jibao.tech/openapi.json
+WebSocket:    wss://jibao.tech/api/v1/realtime/ws?token=<access_token>
 ```
 
-生产环境建议用环境变量：
+本地开发建议：
+
+```text
+前端页面: http://localhost:5173
+前端请求: /api/v1/...
+Vite 代理: http://127.0.0.1:8000
+```
+
+环境变量建议：
 
 ```env
-VITE_API_BASE_URL=https://你的域名/api/v1
+VITE_API_BASE_URL=https://jibao.tech/api/v1
 ```
 
-APK 里只能放 API 地址，不能放智谱 key、JWT secret、数据库地址。
+如果本地开发走 Vite 代理，也可以让请求层支持：
 
-### 2.2 统一响应结构
-
-普通 JSON 接口返回：
-
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {}
-}
+```env
+VITE_API_BASE_URL=/api/v1
 ```
 
-前端请求层需要：
+注意：
 
-1. `code === 0` 时返回 `data`
-2. `code !== 0` 时抛业务错误
-3. `401` 或业务码 `40100/40101` 时清 token 并跳转登录
-4. `42200` 展示表单字段错误
-
-### 2.3 鉴权
-
-登录以外的业务接口都要带：
-
-```http
-Authorization: Bearer <access_token>
-```
-
-token 建议先存 `localStorage`，后续再优化。
+1. 当前后端默认 CORS 只放行本地开发源：`http://localhost:5173` 和 `http://127.0.0.1:5173`。
+2. 如果前端静态页要部署到别的域名，必须额外做同源反代，或者让后端补 CORS。
+3. APK 或原生客户端只能放 API 地址，不能放模型 key、JWT secret、数据库地址。
 
 ---
 
-## 3. 必须先改的文件
+## 3. 当前代码现状
 
-### 3.1 `frontend/vite.config.js`
+现状不是“部分接好”，而是绝大多数核心页面仍是假数据：
 
-确认开发代理不要把 `/api` 重写错。
+1. `frontend/src/api/chat.js`
+   还在调 `GET /api/chat?msg=...`
+2. `frontend/src/views/ChatView.vue`
+   仍在使用本地消息数组、`msg.text`、本地随机主动提醒、无登录态聊天
+3. `frontend/src/views/RecordView.vue`
+   仍在写 `localStorage`
+4. `frontend/src/views/ProfileView.vue`
+   完全静态
+5. `frontend/src/views/HomeView.vue`
+   完全静态
+6. `frontend/src/router/index.js`
+   还没有登录页、路由守卫、受保护页面控制
 
-推荐方向：
+---
+
+## 4. 第一优先级：先把基础设施补齐
+
+### 4.1 `frontend/vite.config.js`
+
+当前代理配置方向是对的，保留即可：
 
 ```js
 server: {
   proxy: {
     '/api': {
       target: 'http://127.0.0.1:8000',
-      changeOrigin: true
-    }
-  }
+      changeOrigin: true,
+    },
+  },
 }
 ```
 
-这样前端请求 `/api/v1/...` 会直接转发到后端。
+不要额外加 `rewrite`，否则会把 `/api/v1/...` 改坏。
 
-### 3.2 新增 `frontend/src/api/request.js`
+### 4.2 新增 `frontend/src/api/request.js`
 
 职责：
 
 1. 拼接 `baseURL`
-2. 注入 token
+2. 注入 `Authorization: Bearer <token>`
 3. 统一解包 `{ code, message, data }`
-4. 统一处理错误
-5. 支持普通 JSON 请求
+4. 统一处理 `401`、`422`、普通业务错误
+5. 暴露 token 工具函数
 
-建议暴露：
+建议导出：
 
 ```js
 request(path, options)
@@ -116,11 +125,12 @@ setToken(token)
 clearToken()
 ```
 
-### 3.3 新增或改造 API 文件
+### 4.3 新增 API 文件
 
-需要补齐：
+建议至少补齐：
 
 ```text
+frontend/src/api/request.js
 frontend/src/api/auth.js
 frontend/src/api/user.js
 frontend/src/api/profile.js
@@ -128,14 +138,28 @@ frontend/src/api/record.js
 frontend/src/api/conversation.js
 frontend/src/api/message.js
 frontend/src/api/chat.js
-frontend/src/api/rag.js
+frontend/src/api/realtime.js
 ```
 
 ---
 
-## 4. 登录模块
+## 5. 第二优先级：先把登录态跑通
 
-### 4.1 登录接口
+### 5.1 新增登录页
+
+建议新增：
+
+```text
+frontend/src/views/LoginView.vue
+```
+
+路由补到：
+
+```text
+/login
+```
+
+### 5.2 登录接口
 
 接口：
 
@@ -162,59 +186,74 @@ username=<username>&password=<password>
 前端动作：
 
 1. 保存 `access_token`
-2. 跳转首页或聊天页
-3. 后续请求统一带 `Authorization`
+2. 立即请求 `GET /api/v1/users/me`
+3. 保存当前用户状态
+4. 登录成功后跳转到 `/chat` 或 `/`
 
-### 4.2 注册接口
+### 5.3 路由守卫
 
-接口：
+除登录和注册外，其余页面都应该是受保护页面。
 
-```http
-POST /api/v1/auth/register
+建议保护：
+
+```text
+/
+/chat
+/record
+/profile
 ```
 
-JSON：
+规则：
 
-```json
-{
-  "username": "demo",
-  "email": "demo@example.com",
-  "phone": "13900000000",
-  "password": "Pass123456",
-  "confirm_password": "Pass123456"
-}
-```
+1. 无 token 进入受保护页时跳 `/login`
+2. 遇到 `401` 时自动清 token 并跳 `/login`
 
 ---
 
-## 5. 聊天模块：默认 RAG
+## 6. 第三优先级：重做聊天页
 
-### 5.1 重要产品规则
+### 6.1 需要改的文件
 
-聊天默认就是 RAG。
-
-前端默认不要传：
-
-```json
-{
-  "mode": "rag",
-  "knowledge_base_id": 1
-}
+```text
+frontend/src/api/chat.js
+frontend/src/api/conversation.js
+frontend/src/api/message.js
+frontend/src/views/ChatView.vue
 ```
 
-后端会自动选择全局 active 知识库。
+### 6.2 必须删除的旧逻辑
 
-如果新部署环境没有知识库，后端会自动退回普通聊天。
+删除：
 
-### 5.2 非流式聊天
+1. `GET /api/chat?msg=...`
+2. `msg.text`
+3. 本地随机主动提醒按钮
+4. 未登录直接发消息
+5. 没有会话也直接发消息
 
-接口：
+### 6.3 正确接法
+
+先调：
 
 ```http
+GET /api/v1/conversations
+POST /api/v1/conversations
+GET /api/v1/conversations/{conversation_id}/messages
 POST /api/v1/chat/send
+POST /api/v1/chat/send-stream
+POST /api/v1/chat/messages/{assistant_message_id}/cancel
+POST /api/v1/chat/messages/{assistant_message_id}/regenerate
+POST /api/v1/chat/messages/{assistant_message_id}/regenerate-stream
 ```
 
-最小 JSON：
+### 6.4 重要产品规则
+
+1. 默认聊天就是 RAG
+2. 普通用户前端不要默认传 `knowledge_base_id`
+3. 前端也不要默认手写 `mode=rag`
+4. 如果明确想走普通聊天，再显式传 `mode: "plain"`
+
+### 6.5 非流式发送最小请求
 
 ```json
 {
@@ -223,291 +262,163 @@ POST /api/v1/chat/send
 }
 ```
 
-返回 `data`：
+### 6.6 聊天页展示要求
 
-```json
-{
-  "conversation_id": 1,
-  "user_message_id": 10,
-  "assistant_message_id": 11,
-  "reply": "回答正文",
-  "assistant_status": "completed",
-  "prompt_version": "phase13.rag.v1",
-  "replied_at": "2026-04-21T...",
-  "citations": [
-    {
-      "source_index": 1,
-      "chunk_id": 123,
-      "document_id": 1,
-      "knowledge_base_id": 1,
-      "title": "中国高血压防治指南...",
-      "file_name": "xxx.pdf",
-      "content_preview": "引用片段预览",
-      "score": 1.23,
-      "chunk_index": 5
-    }
-  ]
-}
-```
+1. 消息字段统一使用 `content`
+2. 用户发送后立即本地插入一条 user 消息
+3. 后端成功返回后追加 assistant 消息
+4. `reply` 作为 AI 主体内容展示
+5. `citations` 作为“引用来源”折叠区展示
+6. `assistant_status` 为 `streaming` 时显示生成中
+7. 完成后可显示“重新生成”
 
-前端展示要求：
+### 6.7 流式聊天
 
-1. 用户消息立即追加到列表。
-2. 后端返回后追加 assistant 消息。
-3. `reply` 展示为 AI 内容。
-4. `citations` 展示为“引用来源”折叠区。
-5. `prompt_version` 可放调试信息，不必给普通用户展示。
-
-### 5.3 普通聊天逃生路径
-
-如果某些场景明确不想用知识库，可以传：
-
-```json
-{
-  "conversation_id": 1,
-  "content": "我们随便聊聊。",
-  "mode": "plain"
-}
-```
-
-此时 `citations` 应为空。
-
-### 5.4 流式聊天，可选
-
-接口：
-
-```http
-POST /api/v1/chat/send-stream
-```
-
-请求体和 `/chat/send` 一样。默认也走 RAG。
-
-前端如果开启“流式输出”选项，就调用这个接口；否则调用 `/chat/send`。
-
-SSE event 数据格式：
+SSE 事件格式：
 
 ```text
 data: {"event":"start", ...}
-
-data: {"event":"token", "token":"..."}
-
-data: {"event":"finish", "reply":"完整回答", "citations":[...]}
+data: {"event":"token","token":"..."}
+data: {"event":"finish","reply":"完整回答","citations":[...]}
 ```
 
 前端处理：
 
-1. `start`：创建 assistant 占位消息，状态设为 `streaming`
-2. `token`：把 token 追加到 assistant 内容
-3. `finish`：状态设为 `completed`，保存最终 `reply` 和 `citations`
-4. `error`：状态设为 `failed`，展示错误提示
-
-### 5.5 停止生成与重生成
-
-取消：
-
-```http
-POST /api/v1/chat/messages/{assistant_message_id}/cancel
-```
-
-重生成：
-
-```http
-POST /api/v1/chat/messages/{assistant_message_id}/regenerate
-```
-
-流式重生成：
-
-```http
-POST /api/v1/chat/messages/{assistant_message_id}/regenerate-stream
-```
-
-前端按钮建议：
-
-1. assistant 正在 streaming 时显示“停止”
-2. assistant completed/failed 时显示“重新生成”
+1. `start` 时创建 assistant 占位消息
+2. `token` 时逐段拼接内容
+3. `finish` 时写入最终 `reply`、`citations`
+4. `error` 时标记失败
 
 ---
 
-## 6. 会话和消息模块
+## 7. 第四优先级：重做记录页
 
-### 6.1 会话列表
+### 7.1 需要改的文件
 
-```http
-GET /api/v1/conversations
+```text
+frontend/src/api/record.js
+frontend/src/views/RecordView.vue
 ```
 
-### 6.2 创建会话
+### 7.2 必须删除的旧逻辑
 
-```http
-POST /api/v1/conversations
+删除：
+
+```js
+localStorage.setItem('healthRecord', ...)
 ```
 
-JSON：
+### 7.3 当前页面建议接法
 
-```json
-{
-  "title": "新会话"
-}
-```
+当前页面其实是三个记录入口，保存时可以拆成最多三条真实记录：
 
-### 6.3 消息列表
+1. 服药情况
+   - `record_type: "medication"`
+   - `value: "已服用"` 或 `value: "未服用"`
+2. 血压记录
+   - `record_type: "blood_pressure"`
+   - `value: "128/82"`
+   - `unit: "mmHg"`
+3. 身体状态
+   - `record_type: "checkin"`
+   - `value: "头晕"` / `value: "乏力"` / `value: "正常"`
 
-```http
-GET /api/v1/conversations/{conversation_id}/messages
-```
-
-消息字段使用：
-
-```json
-{
-  "id": 1,
-  "conversation_id": 1,
-  "role": "user",
-  "content": "消息内容",
-  "status": "completed",
-  "reply_to_message_id": null,
-  "prompt_version": null,
-  "created_at": "...",
-  "updated_at": "..."
-}
-```
-
-前端不要再使用旧字段 `text`，统一使用 `content`。
-
----
-
-## 7. 健康档案模块
-
-### 7.1 读取档案
-
-```http
-GET /api/v1/profiles/me
-```
-
-如果返回 `40411`，说明还没有档案，前端展示创建表单。
-
-### 7.2 创建档案
-
-```http
-POST /api/v1/profiles/me
-```
-
-### 7.3 更新档案
-
-```http
-PUT /api/v1/profiles/me
-```
-
-前端字段必须和后端 schema 对齐，不要自创字段。
-
----
-
-## 8. 健康记录模块
-
-### 8.1 创建记录
+对应接口：
 
 ```http
 POST /api/v1/records
-```
-
-示例：血压
-
-```json
-{
-  "record_type": "blood_pressure",
-  "value": "128/82",
-  "unit": "mmHg",
-  "note": "早晨测量"
-}
-```
-
-示例：服药
-
-```json
-{
-  "record_type": "medication",
-  "value": "已服药",
-  "unit": null,
-  "note": "降压药"
-}
-```
-
-示例：身体状态
-
-```json
-{
-  "record_type": "checkin",
-  "value": "今天有点头晕",
-  "unit": null,
-  "note": null
-}
-```
-
-### 8.2 记录列表
-
-```http
 GET /api/v1/records
 ```
 
-前端当前 `RecordView.vue` 里的 `localStorage` 逻辑必须删除。
+建议保存成功后：
+
+1. 给出成功提示
+2. 清空表单
+3. 重新拉取当天记录列表
 
 ---
 
-## 9. 知识库和 RAG 调试页
+## 8. 第五优先级：重做档案页
 
-普通用户端可以不做知识库管理页。
-
-如果要做调试页，优先接：
-
-```http
-POST /api/v1/rag/retrieve-debug
-```
-
-JSON：
-
-```json
-{
-  "knowledge_base_id": 1,
-  "query": "老年高血压日常管理",
-  "top_k": 5
-}
-```
-
-说明：
-
-1. 当前知识库是全局共享的。
-2. 普通聊天不需要传 `knowledge_base_id`。
-3. 管理端后续再做文档导入、索引状态、失败重试。
-
----
-
-## 10. 主动消息和实时能力
-
-可以后置，不阻塞第一版部署。
-
-已有接口：
+### 8.1 需要改的文件
 
 ```text
-GET /api/v1/proactive/messages
-PATCH /api/v1/proactive/messages/{message_id}/displayed
-GET /api/v1/proactive/window
-PUT /api/v1/proactive/window
-POST /api/v1/realtime/test-push/me
-WebSocket /api/v1/realtime/ws
+frontend/src/api/profile.js
+frontend/src/views/ProfileView.vue
 ```
 
-第一版前端可以先不做复杂 WebSocket，只保留页面入口或后续迭代。
+### 8.2 当前问题
+
+`ProfileView.vue` 现在完全是静态文案，没有真实用户数据。
+
+### 8.3 正确接法
+
+```http
+GET /api/v1/profiles/me
+POST /api/v1/profiles/me
+PUT /api/v1/profiles/me
+```
+
+建议页面行为：
+
+1. 进入页面先请求 `GET /profiles/me`
+2. 如果返回 `40411`，展示创建档案表单
+3. 如果已有档案，展示档案内容和编辑表单
+4. 字段必须严格对齐后端 schema，不要自创字段
 
 ---
 
-## 11. 页面改造顺序
+## 9. 第六优先级：首页怎么处理
 
-建议按下面顺序做：
+### 9.1 `frontend/src/views/HomeView.vue`
 
-1. `vite.config.js`
-2. `src/api/request.js`
-3. `src/api/auth.js`
-4. 登录页或登录弹窗
+首页当前完全静态。
+
+第一版有两个可接受方案：
+
+方案 A：先保留静态首页，只把文案改成“演示用占位首页”  
+方案 B：接一点真实数据，例如：
+
+```http
+GET /api/v1/proactive/messages
+GET /api/v1/records
+GET /api/v1/profiles/me
+```
+
+如果时间紧，首页不是第一阻塞项，优先级低于登录 / 聊天 / 记录 / 档案。
+
+---
+
+## 10. 第七优先级：可后置能力
+
+以下能力可以放到第一版之后：
+
+1. WebSocket 实时推送
+2. 主动消息完整链路
+3. RAG 调试页
+4. 知识库管理页
+5. 会话摘要页
+6. 用户长期记忆管理页
+
+其中最值得保留接口入口的是：
+
+```text
+POST /api/v1/realtime/test-push/me
+GET  /api/v1/proactive/messages
+PATCH /api/v1/proactive/messages/{message_id}/displayed
+WS   /api/v1/realtime/ws?token=<access_token>
+```
+
+---
+
+## 11. 推荐开发顺序
+
+建议按下面顺序推进：
+
+1. `src/api/request.js`
+2. `src/api/auth.js`
+3. `LoginView.vue`
+4. `router/index.js` 路由守卫
 5. `src/api/conversation.js`
 6. `src/api/message.js`
 7. `src/api/chat.js`
@@ -516,96 +427,32 @@ WebSocket /api/v1/realtime/ws
 10. `ProfileView.vue`
 11. `src/api/record.js`
 12. `RecordView.vue`
-13. 引用来源组件
-14. 可选流式输出开关
-15. 主动消息 / WebSocket 后续再接
+13. 首页轻量调整
+14. 流式输出开关
+15. citations 展示优化
 
 ---
 
-## 12. 当前必须删除的旧逻辑
+## 12. 前端验收标准
 
-### `frontend/src/api/chat.js`
+第一版至少满足：
 
-删除旧接口：
-
-```js
-GET /api/chat?msg=...
-```
-
-改成：
-
-```js
-POST /api/v1/chat/send
-POST /api/v1/chat/send-stream
-```
-
-### `frontend/src/views/ChatView.vue`
-
-删除：
-
-1. `msg.text`
-2. 本地随机主动提醒
-3. 无会话直接发消息
-4. 不带 token 调聊天接口
-5. 手动选择 RAG 的强依赖
-
-改成：
-
-1. 先创建或选择会话
-2. 消息字段用 `content`
-3. 默认发送走 RAG
-4. 引用来源来自 `citations`
-5. 流式输出由用户选项控制
-
-### `frontend/src/views/RecordView.vue`
-
-删除：
-
-```js
-localStorage.setItem('healthRecord', ...)
-```
-
-改成调用：
-
-```http
-POST /api/v1/records
-GET /api/v1/records
-```
-
-### `frontend/src/views/ProfileView.vue`
-
-删除纯静态展示，改成：
-
-```http
-GET /api/v1/profiles/me
-POST /api/v1/profiles/me
-PUT /api/v1/profiles/me
-```
+1. `npm run build` 通过
+2. 能注册或登录
+3. 登录后能请求 `/users/me`
+4. 无 token 不能进入受保护页面
+5. 401 时自动清 token 并跳登录
+6. 能创建或读取 Profile
+7. 能提交真实 Record 并重新拉取列表
+8. 能创建会话并拉消息
+9. 默认聊天能拿到 AI 回复
+10. 聊天结果里能展示 `citations`
+11. 可选开启流式输出
+12. 页面里不再出现 `/api/chat?msg=...`
+13. 页面里不再用 `localStorage` 保存健康记录
 
 ---
 
-## 13. 前端验收标准
+## 13. 可直接转发给前端同学的一句话
 
-第一版内测前端至少满足：
-
-1. `npm run build` 通过。
-2. 能注册或登录。
-3. 登录后能拿到 `/users/me`。
-4. 能创建或读取 Profile。
-5. 能创建 Record 并看到列表。
-6. 能创建会话并拉取消息。
-7. 默认聊天能拿到 AI 回复。
-8. 默认聊天响应里能展示 citations。
-9. 可选开启流式输出。
-10. 无 token 时不允许进入受保护页面。
-11. 401 时自动清 token 并回登录。
-12. 页面里不再出现 `/api/chat?msg=...`。
-13. 页面里不再用 `localStorage` 保存健康记录。
-
----
-
-## 14. 一句话版本
-
-前端现在要做的是：
-
-> **按真实后端 Phase 13 接口重写请求层和核心页面；聊天默认就是全局共享知识库 RAG，流式输出只是前端可选的发送方式。**
+> 前端现在要按真实后端 Phase 13 接口重写请求层、登录态、聊天页、记录页和档案页；线上接口统一改成 `https://jibao.tech/api/v1`，聊天默认就是 RAG，不需要前端默认传 `mode=rag` 或 `knowledge_base_id`。

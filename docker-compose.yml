@@ -1,0 +1,28 @@
+services:
+  backend:
+    container_name: vita-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.13-slim}
+    env_file:
+      - ./.env
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend/healthy_system.db:/app/healthy_system.db
+      - ./backend/storage:/app/storage
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health').read()",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
