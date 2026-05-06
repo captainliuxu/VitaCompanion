@@ -4,6 +4,7 @@ import ChatView from '../views/ChatView.vue'
 import RecordView from '../views/RecordView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import LoginView from '../views/LoginView.vue'
+import HealthProfile from '../views/HealthProfile.vue'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -13,6 +14,7 @@ const router = createRouter({
     { path: '/profile', name: 'profile', component: ProfileView },
     { path: '/register', name: 'register', component: () => import('../views/RegisterView.vue') },
     { path: '/login', name: 'login', component: LoginView },
+    { path: '/healthprofile', name: 'healthprofile', component: HealthProfile },
   ],
 })
 

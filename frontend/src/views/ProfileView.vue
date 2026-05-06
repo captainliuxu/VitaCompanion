@@ -18,7 +18,7 @@
 
       <!-- 已登录：显示个人资料 -->
       <div v-else class="profile-content">
-        <div class="card">疾病：高血压</div>
+        <div class="card" @click="goToHealth">健康档案</div>
         <div class="card">
           用药计划：<br>
           早 8:00<br>
@@ -118,13 +118,13 @@ const editForm = ref({
   password: ''
 })
 
+const goToHealth = () => router.push('/healthyprofile')
 const goToLogin = () => router.push('/login')
 const goToRegister = () => router.push('/register')
 
 const logout = () => {
   localStorage.removeItem('access_token')
   token.value = null
-  alert('退出成功')
   router.push('/login')
 }
 
