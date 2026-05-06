@@ -1,15 +1,19 @@
-.env
 .env.example
+.env
 .idea/
 __pycache__/
 *.pyc
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-journal
+*.db-wal
+*.db-shm
 node_modules/
 dist/
 .vite/
-.vite/
-/backend/app/schemas/common.py
-/backend/requirements.txt
-*.db
 .codex_memory/
 AGENTS.md
+/backend/storage/
 
